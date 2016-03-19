@@ -179,7 +179,7 @@ public class ProxyManager {
 							stylepairs.add(new HMAStylePair(m.group(1), m.group (2)));
 						}
 						
-						//remove all white spaces
+						//remove all /r /n
 						code = code.replaceAll("[\\r\\n]", "");
 						code = code.replaceAll("<style>.*?</style>", "");
 						
@@ -187,28 +187,42 @@ public class ProxyManager {
 						for (HMAStylePair sp : stylepairs) {
 							if (sp.isDisplayFlag() == false) {
 								code = code.replaceAll ("<span class=\"" + sp.getKey() +"\">.*?</span>", "");
+								code = code.replaceAll ("<div class=\"" + sp.getKey() +"\">.*?</span>", "");
+							}
+						}
+						
+						//remove all span and div tags that contain a class that is not in the inline CSS and it's not a number
+						// or it has - in the class name.
+						p = Pattern.compile("class=\"(.*?)\"", Pattern.MULTILINE | Pattern.DOTALL);
+						m = p.matcher(code);
+						while (m.find()) {
+							boolean found = false;
+							for (HMAStylePair sp : stylepairs) {
+								if (sp.getKey().equalsIgnoreCase(m.group(1))) {
+									found = true;
+								}
+							}
+							
+							if (found == false && (!m.group(1).matches("^\\d+$") || m.group(1).matches("\\-"))) {
+								code = code.replaceAll ("<div class=\"" + m.group(1) +"\">.*?</span>", "");
+								code = code.replaceAll ("<span class=\"" + m.group(1) +"\">.*?</span>", "");
 							}
 						}
 											
 						// clear all span tags with attribute value display:none
 						code = code.replaceAll("<span style=\"display:none\">.*?</span>", "");
 						
-						
 						// clear all div tags with attribute value display:none
 						code = code.replaceAll("<div style=\"display:none\">.*?</div>", "");
 						
 						//replace all span tags without any values
 						code = code.replaceAll("<span></span>", "");
-												
-						// remove spaces
-						code = code.replaceAll("\\s", "");
 											
-						p = Pattern.compile(">([\\.0-9]+)<", Pattern.MULTILINE | Pattern.DOTALL);
-						m = p.matcher(code);
-						while (m.find()) {
-							ip = ip + m.group(1);
-						}			
+						// remove space characters 
+						code = code.replaceAll("\\s", "");
 						
+						//Extract the text only
+						ip = Jsoup.parse(code).text();	
 					}
 					
 					if (i==2) {
@@ -222,18 +236,18 @@ public class ProxyManager {
 					
 					// reset the column count including ips and all the other variables
 					if (i > 6) {				
-						// add proxy to the list
-						if (ip.matches("\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}") && port.matches("^[0-9]+$") && type.matches("HTTP[S]*"))  {
-							Proxy p = new Proxy (Proxy.Type.HTTP, new InetSocketAddress(ip, Integer.parseInt(port)));
-							//if (verifyProxy(p)) {
-								System.out.println("Adding proxy: " + ip + ":" + port + " to the proxy list...");
-								mProxyList.add(p);
-							//} else {
-								//System.out.println("Excluded proxy: " + ip + ":" + port + " from the proxy list...");
-								//p = null;
-							//}
+						// make sure the ip is in correct format and then add proxy to the list
+						if (ip.matches("\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}") && port.matches("^[0-9]+$")){
+							System.out.println("Adding " + type + " proxy: " + ip + ":" + port + " to the proxy list...");
+							Proxy p = null;
+							if (type.matches("HTTP[S]*"))  {
+								p = new Proxy (Proxy.Type.HTTP, new InetSocketAddress(ip, Integer.parseInt(port)));
+							} else if (type.matches("socks4/5")) {
+								p = new Proxy (Proxy.Type.SOCKS, new InetSocketAddress(ip, Integer.parseInt(port)));
+							}
+							mProxyList.add(p);
 						} else {
-							System.out.println("Excluded proxy: " + ip + ":" + port + " from the proxy list...");
+							System.out.println("Excluding proxy: " + ip + ":" + port + " from the proxy list...");
 						}
 
 						i = 0;
@@ -297,13 +311,13 @@ public class ProxyManager {
 			long duration = (long) ((endtime - starttime)/1000000000);
 			System.out.println("Loaded proxies in " + duration + " seconds");
 			System.out.println("Total proxies in list: " + pm.getProxyCount());
-			System.out.println("Purging the proxy list...");
+			System.out.println("cleaning the proxy list...");
 			
 			//clean the proxy list
 			
 			// set the default connection time and read time to filter out the slow proxies
-			pm.setConnectTimeout(500); //500 msec max to connect
-			pm.setReadTimeout(3000); //3 sec max to read the page
+			pm.setConnectTimeout(1000); //500 msec max to connect
+			pm.setReadTimeout(5000); //3 sec max to read the page
 			
 			starttime = System.nanoTime();
 			pm.checkProxyList();

@@ -27,5 +27,5 @@ public class HMAStylePair {
 
 	public void setDisplayFlag(boolean pDisplayFlag) {
 		mDisplayFlag = pDisplayFlag;
-	}	
+	}
 }
