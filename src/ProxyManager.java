@@ -13,6 +13,11 @@ import java.net.Proxy;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Random;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -24,14 +29,24 @@ import org.jsoup.nodes.Element;
 public class ProxyManager {
 	
 	private ArrayList <Proxy> mProxyList;
+	private static ProxyManager mProxyManager;
 	private String mProxyListURL = "http://proxylist.hidemyass.com";
 	private InetAddress mPublicIP;
 	private String mCheckIPURL = "http://checkip.dyndns.org";
 	private int mLastPage = 1;
 	private int mReadTimeout = 0;
 	private int mConnectTimeout = 0;
+	private int mNoTestThread = 1;
+	private ExecutorService mPool;
 
-	ProxyManager () throws Exception {
+	private ProxyManager () throws Exception {
+	}
+	
+	public static ProxyManager getInstance () throws Exception {
+		if (mProxyManager == null) {
+			mProxyManager = new ProxyManager();
+		}
+		return mProxyManager;
 	}
 	
 	public InetAddress getPublicIP (Document pJoupDocument) throws IOException {
@@ -47,13 +62,13 @@ public class ProxyManager {
 	}
 	
 	private boolean verifyProxy (Proxy pProxy) {
-		System.out.println("Testing Proxy: " + pProxy.address().toString());
+		//System.out.println("Testing Proxy: " + pProxy.address().toString());
 		try {
 			Document doc = getDocument (mCheckIPURL, pProxy);
 			doc = null;
 			return true;
 		} catch (IOException e) {
-			System.out.println(e.getMessage());
+			//System.out.println(e.getMessage());
 			return false;
 		}
 	}
@@ -78,20 +93,14 @@ public class ProxyManager {
 	    while ((line = in.readLine()) != null) {
 	      tmp.append(line);
 	    }
-		 return Jsoup.parse(String.valueOf(tmp));
+	    uc.disconnect();
+	    in.close();
+	    uc = null;
+	    in = null;
+		return Jsoup.parse(String.valueOf(tmp));
 	}
-	
-	public ArrayList <Proxy> getProxyList (String pProxyListURL) throws Exception {
-		if (mProxyList!=null) {
-			return mProxyList;			
-		} else {
-			mProxyListURL = pProxyListURL;
-			loadProxy();
-			return mProxyList;
-		}
-	}
-	
-	public ArrayList <Proxy> getProxyList () throws Exception {
+		
+	public synchronized ArrayList <Proxy> getProxyList () throws Exception {
 		if (mProxyList!=null) {
 			return mProxyList;			
 		} else {
@@ -101,32 +110,52 @@ public class ProxyManager {
 	}
 	
 	public synchronized void checkProxyList () {
-		ArrayList <Proxy> toRemove = new ArrayList<Proxy>(); 
-		synchronized (mProxyList) {
-			if (mProxyList != null) {
-				for (Proxy p : mProxyList) {
-					if (!verifyProxy(p)) {
-						System.out.println("Deleting " + p.address().toString() + " from list...");
-						toRemove.add(p);
+		if (mPool==null) mPool = Executors.newFixedThreadPool(mNoTestThread);
+		
+		final ArrayList <Proxy> toRemove = new ArrayList<Proxy>(); 
+		if (mProxyList != null) {
+			for (final Proxy p : mProxyList) {
+				mPool.execute(
+					new Runnable() {
+						public void run() {									
+							if (!mProxyManager.verifyProxy(p)) {
+								toRemove.add(p);
+							}
+						}
 					}
-				}
+				);
+			}
+		}
+		
+		// make sure that the mPool is shutdown at the end and we wait for the 
+		mPool.shutdown();
+		while (!mPool.isTerminated()) {
+			try {
+				Thread.sleep(1000);
+			} catch (InterruptedException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
 			}
 		}
 		
 		if (toRemove.size() > 0) {
+			System.out.println("Removing " + toRemove.size() + " from the proxy list");
 			for (Proxy p : toRemove) {
 				mProxyList.remove(p);
 			}
 			toRemove.clear();
 		}
-		toRemove=null;
+
+		mPool = null;
 	}
 	
 	private synchronized void clearProxyList () {
-		if (mProxyList != null) mProxyList.clear();
+		synchronized (mProxyList) {
+			if (mProxyList != null) mProxyList.clear();
+		}
 	}
 		
-	private void loadProxy () throws IOException {
+	private synchronized void loadProxy () throws IOException {
 		Connection jsc = Jsoup.connect (mProxyListURL).timeout(5000);
 		Document hmasite = jsc.get();
 		
@@ -238,7 +267,7 @@ public class ProxyManager {
 					if (i > 6) {				
 						// make sure the ip is in correct format and then add proxy to the list
 						if (ip.matches("\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}") && port.matches("^[0-9]+$")){
-							System.out.println("Adding " + type + " proxy: " + ip + ":" + port + " to the proxy list...");
+							//System.out.println("Adding " + type + " proxy: " + ip + ":" + port + " to the proxy list...");
 							Proxy p = null;
 							if (type.matches("HTTP[S]*"))  {
 								p = new Proxy (Proxy.Type.HTTP, new InetSocketAddress(ip, Integer.parseInt(port)));
@@ -247,7 +276,7 @@ public class ProxyManager {
 							}
 							mProxyList.add(p);
 						} else {
-							System.out.println("Excluding proxy: " + ip + ":" + port + " from the proxy list...");
+							//System.out.println("Excluding proxy: " + ip + ":" + port + " from the proxy list...");
 						}
 
 						i = 0;
@@ -298,10 +327,18 @@ public class ProxyManager {
 		mConnectTimeout = pConnectTimeout;
 	}
 
+	public int getTestThreadTotal() {
+		return mNoTestThread;
+	}
+
+	public void setTestThreadNumber(int pNoTestThread) {
+		mNoTestThread = pNoTestThread;
+	}
+
 	public static void main(String[] args) {
 		try {
 			// Create instance
-			ProxyManager pm = new ProxyManager();
+			ProxyManager pm = ProxyManager.getInstance();
 			
 			//load the proxies
 			long starttime = System.nanoTime();
@@ -311,17 +348,19 @@ public class ProxyManager {
 			long duration = (long) ((endtime - starttime)/1000000000);
 			System.out.println("Loaded proxies in " + duration + " seconds");
 			System.out.println("Total proxies in list: " + pm.getProxyCount());
-			System.out.println("cleaning the proxy list...");
 			
+				
 			//clean the proxy list
-			
+			System.out.println("cleaning the proxy list...");
 			// set the default connection time and read time to filter out the slow proxies
-			pm.setConnectTimeout(1000); //500 msec max to connect
-			pm.setReadTimeout(5000); //3 sec max to read the page
+			pm.setConnectTimeout(2000); //500 msec max to connect
+			pm.setReadTimeout(10000); //3 sec max to read the page
+			pm.setTestThreadNumber(10); // set 10 threads
 			
 			starttime = System.nanoTime();
 			pm.checkProxyList();
 			endtime = System.nanoTime();
+			
 			duration = (long) ((endtime - starttime)/1000000000);
 			System.out.println("Purged proxies in " + duration + " seconds");
 			System.out.println("Total Proxies in list: " + pm.getProxyCount());
